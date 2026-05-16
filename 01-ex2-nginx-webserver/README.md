@@ -25,7 +25,8 @@ AWS EC2 인스턴스를 생성하고 Nginx 웹 서버를 설치하여 퍼블릭 
 7. 퍼블릭 IPv4 주소로 접속 확인
    
 ## 인스턴스 생성 결과 및 보안 그룹 인바운드 규칙
-![EC2 Instance Running](./images/ec2-instance-running.png)
+![EC2 Instance Running](./images/ec2-instance-running.PNG)
+![Inbound Rule](./images/inbound-rule.PNG)
 
 ## 5. 사용 명령어
 ```bash
@@ -72,4 +73,4 @@ pl-00ec8fd779e5b4175
 
 ## 8. 결과
 퍼블릭 IPv4 주소로 접속했을 때 "Hello AWS EC2 - shk500" 페이지가 정상적으로 출력됨
-![Nginx Result Page](./images/nginx-result-page.png)
+![Nginx Result Page](./images/nginx-result-page.PNG)
