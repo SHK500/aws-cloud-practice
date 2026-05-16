@@ -74,4 +74,4 @@ pl-00ec8fd779e5b4175
 ![Nginx Result Page](./images/nginx-result-page.PNG)
 
 ## 8. 구조 정리
-![EC2 Nginx Architectur](./images/01-draw.PNG)
+![EC2 Nginx Architectur](./images/01-draw.png)
