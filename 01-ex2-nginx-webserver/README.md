@@ -75,5 +75,6 @@ pl-00ec8fd779e5b4175
 
 ## 8. 구조 정리
 ![EC2 Nginx Architectur](./images/01-draw.png)
+
 사용자 브라우저는 HTTP 80번 포트를 통해 EC2 인스턴스의 Nginx 웹 서버에 접속한다.  
 관리자는 AWS Console의 EC2 Instance Connect를 사용해 SSH 22번 포트로 접속하며, SSH 접근은 EC2 Instance Connect Prefix List로 제한했다.
