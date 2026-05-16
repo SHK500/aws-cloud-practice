@@ -47,13 +47,28 @@ echo "<h1>Hello AWS EC2 - shk500</h1>" | sudo tee /usr/share/nginx/html/index.ht
 
 
 ## 7. 트러블 슈팅
-문제 1. EC2 Instance Connect 접속 실패
-원인: SSH 22번 포트가 내 IP로 제한되어 EC2 Instance Connect 연결이 실패함
-해결: 일시적으로 SSH 22번 포트를 0.0.0.0/0으로 변경해 접속 확인 후, 다시 내 IP로 제한함
 
-문제 2. nginx.service not found 오류
-원인: Nginx가 설치되지 않은 상태에서 systemctl start nginx 명령어를 실행함
-해결: sudo dnf install -y nginx 명령어로 Nginx 설치 후 재실행함
+### 문제 1. EC2 Instance Connect 접속 실패
+
+#### 상황
+EC2 인스턴스의 보안을 위해 SSH 22번 포트의 소스를 `내 IP`로 제한했으나, AWS 콘솔의 `EC2 Instance Connect` 기능을 사용해 접속하려고 하면 연결이 실패했다.
+
+처음에는 SSH 22번 포트를 `0.0.0.0/0`으로 열었을 때 접속이 가능했지만, 이는 전 세계 어디서든 SSH 접속 시도가 가능해지는 설정이므로 보안상 적절하지 않다고 판단했다.
+
+#### 원인
+`EC2 Instance Connect`는 로컬 PC에서 직접 SSH 접속하는 방식이 아니라, AWS의 EC2 Instance Connect 서비스 경로를 통해 인스턴스에 접속한다.
+
+따라서 보안 그룹에서 SSH 22번 소스를 `내 IP`로만 제한하면 EC2 Instance Connect의 접속 요청이 허용되지 않아 연결이 실패할 수 있다.
+
+#### 해결
+SSH 22번 포트를 전체 공개하지 않고 EC2 Instance Connect만 허용하기 위해, 보안 그룹 인바운드 규칙의 소스를 EC2 Instance Connect 전용 Prefix List로 설정했다.
+
+기존 SSH 규칙은 IPv4 CIDR 규칙이었기 때문에 Prefix List로 바로 수정할 수 없었다.  
+따라서 기존 SSH 22번 규칙을 삭제한 뒤, 새 SSH 규칙을 추가하여 소스를 Prefix List로 지정했다.
+
+```text
+pl-00ec8fd779e5b4175
+```
 
 ## 8. 결과
 퍼블릭 IPv4 주소로 접속했을 때 "Hello AWS EC2 - shk500" 페이지가 정상적으로 출력됨
