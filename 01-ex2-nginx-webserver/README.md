@@ -72,3 +72,6 @@ pl-00ec8fd779e5b4175
 ## 7. 결과
 퍼블릭 IPv4 주소로 접속했을 때 "Hello AWS EC2 - shk500" 페이지가 정상적으로 출력됨
 ![Nginx Result Page](./images/nginx-result-page.PNG)
+
+## 8. 구조 정리
+![EC2 Nginx Architectur](./images/01-draw.PNG)
