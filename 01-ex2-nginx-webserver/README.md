@@ -10,14 +10,11 @@ AWS EC2 인스턴스를 생성하고 Nginx 웹 서버를 설치하여 퍼블릭 
 - Security Group
 - EC2 Instance Connect
 
-## 3. 아키텍처
-사용자 브라우저 → 퍼블릭 IP → EC2 인스턴스 → Nginx 웹 서버
-
-## 4. 구축 과정
+## 3. 구축 과정
 1. EC2 인스턴스 생성
 2. 키 페어 생성
 3. 보안 그룹 설정
-   - SSH 22번 포트: 내 IP 허용
+   - SSH 22번 포트: 내 IP 허용 -> 트러블 -> 인바운드 규칙 변경으로 해결
    - HTTP 80번 포트: 전체 허용
 4. EC2 Instance Connect로 서버 접속
 5. Nginx 설치 및 실행
@@ -28,7 +25,7 @@ AWS EC2 인스턴스를 생성하고 Nginx 웹 서버를 설치하여 퍼블릭 
 ![EC2 Instance Running](./images/ec2-instance-running.PNG)
 ![Inbound Rule](./images/inbound-rule.PNG)
 
-## 5. 사용 명령어
+## 4. 사용 명령어
 ```bash
 sudo dnf update -y 
 sudo dnf install -y nginx 
@@ -36,7 +33,8 @@ sudo systemctl start nginx
 sudo systemctl enable nginx 
 echo "<h1>Hello AWS EC2 - shk500</h1>" | sudo tee /usr/share/nginx/html/index.html
 ```
-## 6. 멸령어 설명
+
+## 5. 명령어 설명
 | 명령어                                    | 설명                                |
 | -------------------------------------- | --------------------------------- |
 | `sudo dnf update -y`                   | 서버에 설치된 패키지 목록과 프로그램을 최신 상태로 업데이트 |
@@ -47,7 +45,7 @@ echo "<h1>Hello AWS EC2 - shk500</h1>" | sudo tee /usr/share/nginx/html/index.ht
 
 
 
-## 7. 트러블 슈팅
+## 6. 트러블 슈팅
 
 ### 문제 1. EC2 Instance Connect 접속 실패
 
@@ -71,6 +69,6 @@ SSH 22번 포트를 전체 공개하지 않고 EC2 Instance Connect만 허용하
 pl-00ec8fd779e5b4175
 ```
 
-## 8. 결과
+## 7. 결과
 퍼블릭 IPv4 주소로 접속했을 때 "Hello AWS EC2 - shk500" 페이지가 정상적으로 출력됨
 ![Nginx Result Page](./images/nginx-result-page.PNG)
