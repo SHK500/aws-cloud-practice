@@ -26,11 +26,11 @@ AWS EC2 인스턴스를 생성하고 Nginx 웹 서버를 설치하여 퍼블릭 
 
 ## 5. 사용 명령어
 ```bash
-sudo dnf update -y <서버에 설치된 패키지 목록/프로그램을 최신 상태로 업데이트>
-sudo dnf install -y nginx <웹서버 프로그램인 Nginx를 설치>
-sudo systemctl start nginx <Nginx를 실행>
-sudo systemctl enable nginx <서버를 껐다 켜도 Nginx가 자동으로 켜지게 설정>
-echo "<h1>Hello AWS EC2 - shk500</h1>" | sudo tee /usr/share/nginx/html/index.html <웹사이트 첫 화면 파일을 직접 만들어서, 브라우저에서 접속했을 때 저 문구가 보이게 함>
+sudo dnf update -y 
+sudo dnf install -y nginx 
+sudo systemctl start nginx 
+sudo systemctl enable nginx 
+echo "<h1>Hello AWS EC2 - shk500</h1>" | sudo tee /usr/share/nginx/html/index.html
 ```
 ## 6. 멸령어 설명
 | 명령어                                    | 설명                                |
