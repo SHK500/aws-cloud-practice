@@ -1,56 +1,51 @@
 # HI-HIGH 활동 신청 시스템
 
-대학생 봉사 동아리의 수기 신청, 대기자 승격, 대타 관리 업무를 개선하기 위해 구축한 AWS 서버리스 웹 애플리케이션입니다.
+동아리 활동 신청을 카카오톡 댓글로 받으면서 생기던 수기 확인, 선착순 정리, 대타 모집 문제를 줄이기 위해 만들었습니다.
 
-## Architecture
+약 50명 규모의 동아리에서 사용하는 것을 기준으로 AWS 서버리스 구조를 선택했습니다.
+
+## 구조
 
 ```mermaid
 flowchart LR
-    User["일반 부원·임원진"] --> CF["CloudFront"]
-    CF --> S3["Private S3"]
-    User --> API["API Gateway"]
-    API --> Cognito["Cognito"]
-    API --> Lambda["Lambda"]
-    Lambda --> DynamoDB["DynamoDB"]
-    Lambda --> CloudWatch["CloudWatch"]
-    CloudWatch --> SNS["SNS Email Alert"]
+    User["사용자"] --> CloudFront
+    CloudFront --> S3
+    User --> APIGateway["API Gateway"]
+    APIGateway --> Lambda
+    Lambda --> DynamoDB
+    APIGateway --> Cognito
+    Lambda --> CloudWatch
 ```
 
-- Frontend: S3, CloudFront
-- Backend: API Gateway, Lambda
-- Database: DynamoDB
-- Authentication: Cognito
-- Infrastructure as Code: AWS SAM, CloudFormation
-- Monitoring: CloudWatch, SNS
+- S3와 CloudFront: 웹페이지 제공
+- API Gateway와 Lambda: 신청·취소·관리 기능 처리
+- DynamoDB: 활동 및 신청 정보 저장
+- Cognito: 임원진 로그인
+- SAM·CloudFormation: AWS 리소스 배포
+- CloudWatch·SNS: 오류 감지 및 이메일 알림
 
-## Key Features
+## 구현하면서 신경 쓴 부분
 
-- 일반 부원·기자단 활동 신청 및 정원 관리
-- DynamoDB 조건부 처리로 동시 신청 시 정원 초과 방지
-- 취소 시 대기자 자동 승격 및 대타 필요 상태 관리
-- Cognito 기반 임원진 인증과 관리자 기능 분리
-- 활동·신청자 관리, CSV 내보내기, 안전한 활동 삭제
-- API Gateway 5XX, Lambda Error, Throttle 경보 구성
+### 동시 신청
 
-## Design Decisions
+여러 명이 동시에 신청해도 정원이 초과되지 않도록 DynamoDB 조건부 업데이트를 사용했습니다.
 
-- 운영 서버 관리 부담과 소규모 트래픽 비용을 줄이기 위해 서버리스 구조를 선택했습니다.
-- 정적 프론트엔드는 비공개 S3에 저장하고 CloudFront를 통해서만 제공했습니다.
-- 일반 사용자 기능과 관리자 기능을 분리하고 Cognito 토큰으로 관리자 API를 보호했습니다.
-- SAM과 CloudFormation으로 인프라를 코드화해 동일한 구성을 다시 배포할 수 있도록 했습니다.
+### 취소와 대타
 
-## Troubleshooting
+확정자가 취소하면 대기자를 자동으로 승격합니다. 대기자가 없으면 임원진 화면에 대타가 필요한 활동으로 표시하도록 구성했습니다.
 
-활동 삭제 API에서 5XX 오류가 발생했을 때 CloudWatch 경보와 Lambda 로그를 통해 원인을 추적했습니다.  
-삭제 Lambda에 필요한 DynamoDB `GetItem` 권한이 누락된 것을 확인하고, IAM 정책에 해당 권한만 추가한 뒤 SAM으로 재배포하여 해결했습니다.
+### 관리자 권한
 
-이 과정을 통해 API 지표, 애플리케이션 로그, IAM 최소 권한 정책을 연결해 장애를 진단했습니다.
+일반 신청 기능과 관리자 기능을 분리했습니다. 관리자 API는 Cognito 로그인 토큰이 있어야 접근할 수 있습니다.
 
-## What I Learned
+## 장애 해결 경험
 
-- 서버리스 웹 요청 흐름과 AWS 관리형 서비스의 역할
-- Cognito 인증과 IAM 권한 부여의 차이
-- DynamoDB 조건부 처리와 동시성 제어
-- SAM·CloudFormation 기반 Infrastructure as Code
-- CloudWatch 기반 모니터링과 장애 대응
+활동 삭제 기능을 배포한 뒤 API Gateway에서 5XX 오류가 발생했습니다.
 
+CloudWatch 경보와 Lambda 로그를 확인해 보니 삭제 Lambda에 DynamoDB `GetItem` 권한이 빠져 있었습니다. IAM 정책에 필요한 권한만 추가하고 다시 배포해 해결했습니다.
+
+이 경험을 통해 화면의 오류 메시지만 보는 것이 아니라 API Gateway, Lambda 로그, IAM 정책을 순서대로 확인하는 방법을 배웠습니다.
+
+## 사용 기술
+
+AWS SAM, CloudFormation, S3, CloudFront, API Gateway, Lambda, DynamoDB, Cognito, IAM, CloudWatch, SNS, JavaScript
