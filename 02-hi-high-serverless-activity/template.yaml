@@ -1,0 +1,486 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Volunteer club activity application API
+
+Parameters:
+  ActivitiesTableName:
+    Type: String
+    Default: club-activities-dev
+    Description: Existing DynamoDB activities table name
+  ApplicationsTableName:
+    Type: String
+    Default: club-applications-dev
+    Description: DynamoDB applications table name
+
+Globals:
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin: "'*'"
+    Auth:
+      AddDefaultAuthorizerToCorsPreflight: false
+      Authorizers:
+        ClubAdminAuthorizer:
+          UserPoolArn: !GetAtt ClubAdminUserPool.Arn
+  Function:
+    Runtime: nodejs24.x
+    Architectures:
+      - x86_64
+    MemorySize: 128
+    Timeout: 5
+    Environment:
+      Variables:
+        ACTIVITIES_TABLE: !Ref ActivitiesTableName
+
+Resources:
+  WebBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: VolunteerClub
+        - Key: Environment
+          Value: dev
+
+  WebOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-web-oac'
+        Description: Private S3 access for the volunteer club website
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub '${AWS::StackName}-web-cache'
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: none
+          EnableAcceptEncodingBrotli: true
+          EnableAcceptEncodingGzip: true
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  WebResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub '${AWS::StackName}-web-security-headers'
+        SecurityHeadersConfig:
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          XSSProtection:
+            ModeBlock: true
+            Protection: true
+            Override: true
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: Volunteer club application website
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        DefaultRootObject: index.html
+        Origins:
+          - Id: WebBucketOrigin
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !Ref WebOriginAccessControl
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: WebBucketOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachePolicyId: !Ref WebCachePolicy
+          ResponseHeadersPolicyId: !Ref WebResponseHeadersPolicy
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${WebBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}'
+
+  ClubAdminUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: volunteer-club-admin-dev
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 10
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      UserPoolTags:
+        Project: VolunteerClub
+        Environment: dev
+
+  ClubAdminUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref ClubAdminUserPool
+      ClientName: volunteer-club-admin-web-dev
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  ApplicationsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Ref ApplicationsTableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: activityId
+          AttributeType: S
+        - AttributeName: applicantKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: activityId
+          KeyType: HASH
+        - AttributeName: applicantKey
+          KeyType: RANGE
+      Tags:
+        - Key: Project
+          Value: VolunteerClub
+        - Key: Environment
+          Value: dev
+
+  GetActivitiesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: app.lambdaHandler
+      Description: Returns public volunteer club activities from DynamoDB
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ActivitiesTableName
+      Events:
+        GetActivities:
+          Type: Api
+          Properties:
+            Path: /activities
+            Method: get
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+  CreateApplicationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: application.lambdaHandler
+      Description: Creates a confirmed or waitlisted activity application
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ActivitiesTableName}'
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt ApplicationsTable.Arn
+      Events:
+        CreateApplication:
+          Type: Api
+          Properties:
+            Path: /applications
+            Method: post
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+  CancelApplicationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: cancellation.lambdaHandler
+      Description: Cancels an application and promotes the earliest member waitlist entry
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ApplicationsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ActivitiesTableName}'
+      Events:
+        CancelApplication:
+          Type: Api
+          Properties:
+            Path: /applications/cancel
+            Method: post
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+  GetAdminApplicationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: admin-applications.lambdaHandler
+      Description: Returns applicant and replacement-needed data to authenticated club admins
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource: !GetAtt ApplicationsTable.Arn
+      Events:
+        GetAdminApplications:
+          Type: Api
+          Properties:
+            Path: /admin/applications
+            Method: get
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+  AdminReplacementFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: admin-replacement.lambdaHandler
+      Description: Assigns a confirmed substitute to a replacement-needed application
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ApplicationsTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ActivitiesTableName}'
+      Events:
+        AssignAdminReplacement:
+          Type: Api
+          Properties:
+            Path: /admin/applications/replacement
+            Method: post
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+  AdminActivitiesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: admin-activities.lambdaHandler
+      Description: Lists, creates, and updates activities for authenticated club admins
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+              Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ActivitiesTableName}'
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:DeleteItem
+              Resource: !GetAtt ApplicationsTable.Arn
+      Events:
+        ListAdminActivities:
+          Type: Api
+          Properties:
+            Path: /admin/activities
+            Method: get
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+        CreateAdminActivity:
+          Type: Api
+          Properties:
+            Path: /admin/activities
+            Method: post
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+        UpdateAdminActivity:
+          Type: Api
+          Properties:
+            Path: /admin/activities/{activityId}
+            Method: put
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+        DeleteAdminActivity:
+          Type: Api
+          Properties:
+            Path: /admin/activities/{activityId}
+            Method: delete
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+Outputs:
+  WebBucketName:
+    Description: Private S3 bucket for the built web application
+    Value: !Ref WebBucket
+  WebDistributionId:
+    Description: CloudFront distribution ID for cache invalidations
+    Value: !Ref WebDistribution
+  WebUrl:
+    Description: Public HTTPS URL for the volunteer club web application
+    Value: !Sub 'https://${WebDistribution.DomainName}'
+  ActivitiesApiUrl:
+    Description: GET activities API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/activities'
+  ApplicationsApiUrl:
+    Description: POST applications API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/applications'
+  CancelApplicationApiUrl:
+    Description: POST application cancellation API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/applications/cancel'
+  AdminApplicationsApiUrl:
+    Description: Authenticated GET admin applications API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/admin/applications'
+  AdminReplacementApiUrl:
+    Description: Authenticated POST admin replacement API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/admin/applications/replacement'
+  AdminActivitiesApiUrl:
+    Description: Authenticated admin activities API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/admin/activities'
+  ClubAdminUserPoolId:
+    Description: Cognito user pool ID for club administrators
+    Value: !Ref ClubAdminUserPool
+  ClubAdminUserPoolClientId:
+    Description: Cognito app client ID for the future admin web application
+    Value: !Ref ClubAdminUserPoolClient
+  ApplicationsTableName:
+    Description: Applications DynamoDB table name
+    Value: !Ref ApplicationsTable
+  GetActivitiesFunctionArn:
+    Description: Get activities Lambda function ARN
+    Value: !GetAtt GetActivitiesFunction.Arn
+  CreateApplicationFunctionArn:
+    Description: Create application Lambda function ARN
+    Value: !GetAtt CreateApplicationFunction.Arn
+  CancelApplicationFunctionArn:
+    Description: Cancel application Lambda function ARN
+    Value: !GetAtt CancelApplicationFunction.Arn
+  GetAdminApplicationsFunctionArn:
+    Description: Admin applications Lambda function ARN
+    Value: !GetAtt GetAdminApplicationsFunction.Arn
+  AdminReplacementFunctionArn:
+    Description: Admin replacement Lambda function ARN
+    Value: !GetAtt AdminReplacementFunction.Arn
+  AdminActivitiesFunctionArn:
+    Description: Admin activities Lambda function ARN
+    Value: !GetAtt AdminActivitiesFunction.Arn

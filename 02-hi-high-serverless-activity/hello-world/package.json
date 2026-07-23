@@ -1,0 +1,16 @@
+{
+  "name": "volunteer-club-activities-api",
+  "version": "1.0.0",
+  "description": "Volunteer club activities API",
+  "main": "app.js",
+  "repository": "https://github.com/awslabs/aws-sam-cli/tree/develop/samcli/local/init/templates/cookiecutter-aws-sam-hello-nodejs",
+  "author": "SAM CLI",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
+  },
+  "scripts": {
+    "test": "node --test tests/unit/*.mjs"
+  }
+}
