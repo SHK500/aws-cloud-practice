@@ -156,4 +156,34 @@ describe('POST /applications/cancel', () => {
     assert.equal(result.statusCode, 200);
     assert.equal(body.alreadyCancelled, true);
   });
+
+  it('임원진이 수정한 이름으로도 비밀번호를 확인해 취소한다', async () => {
+    const renamed = application({
+      applicantKey: 'MEMBER#홍길동#original-key',
+      name: '홍길동 (고려대)',
+      normalizedName: '홍길동 (고려대)'
+    });
+    const commands = [];
+    const client = {
+      send: async (command) => {
+        commands.push(command);
+        if (command.input?.Key) return {};
+        if (command.input?.FilterExpression?.includes('normalizedName')) {
+          return { Items: [renamed] };
+        }
+        if (command.input?.KeyConditionExpression) return { Items: [] };
+        return {};
+      }
+    };
+
+    const result = await handlerWith(client)(request({
+      name: '홍길동 (고려대)',
+      confirmVacancy: true
+    }));
+
+    assert.equal(result.statusCode, 200);
+    assert.equal(JSON.parse(result.body).status, 'REPLACEMENT_NEEDED');
+    assert.equal(commands.at(-1).input.TransactItems[0].Update.Key.applicantKey,
+      'MEMBER#홍길동#original-key');
+  });
 });

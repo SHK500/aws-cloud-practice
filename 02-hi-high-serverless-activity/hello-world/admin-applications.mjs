@@ -78,10 +78,13 @@ const parseQuery = (event) => {
 
 const publicAdminItem = (item) => ({
   activityId: item.activityId,
+  applicantKey: item.applicantKey,
   applicationId: item.applicationId,
   applicantRole: item.applicantRole,
   name: item.name,
   status: item.status,
+  attendanceStatus: item.attendanceStatus === 'ABSENT' ? 'ABSENT' : 'ATTENDED',
+  attendanceUpdatedAt: item.attendanceUpdatedAt,
   createdAt: item.createdAt,
   cancelledAt: item.cancelledAt,
   promotedAt: item.promotedAt,
@@ -115,7 +118,7 @@ export const createAdminApplicationsHandler = (
     TableName: applicationsTable,
     Limit: limit,
     ExclusiveStartKey: exclusiveStartKey,
-    ProjectionExpression: 'activityId, applicantKey, applicationId, applicantRole, #name, #status, createdAt, cancelledAt, promotedAt, replacementResolvedAt, replacedByApplicationId, assignedAsReplacementAt, replacedApplicationId',
+    ProjectionExpression: 'activityId, applicantKey, applicationId, applicantRole, #name, #status, attendanceStatus, attendanceUpdatedAt, createdAt, cancelledAt, promotedAt, replacementResolvedAt, replacedByApplicationId, assignedAsReplacementAt, replacedApplicationId',
     ExpressionAttributeNames: {
       '#name': 'name',
       '#status': 'status'

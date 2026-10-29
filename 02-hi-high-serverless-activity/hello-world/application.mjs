@@ -1,9 +1,16 @@
-import { randomBytes, randomUUID, scryptSync } from 'node:crypto';
+import {
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  timingSafeEqual
+} from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
+  GetCommand,
   TransactWriteCommand
 } from '@aws-sdk/lib-dynamodb';
+import { applicantKeyFor, legacyApplicantKey } from './applicant-key.mjs';
 
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
@@ -97,6 +104,23 @@ const isActivityConditionFailure = (error) =>
   error?.name === 'TransactionCanceledException'
   && cancellationReasons(error)[0]?.Code === 'ConditionalCheckFailed';
 
+const passwordMatches = (password, application) => {
+  if (!application?.passwordSalt || !application?.passwordHash) return false;
+
+  try {
+    const expected = Buffer.from(application.passwordHash, 'hex');
+    const actual = scryptSync(password, application.passwordSalt, expected.length);
+    return expected.length > 0
+      && expected.length === actual.length
+      && timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+};
+
+const isActiveApplication = (application) =>
+  application && !['CANCELLED', 'REPLACEMENT_NEEDED'].includes(application.status);
+
 const transactionFor = ({
   activitiesTable,
   applicationsTable,
@@ -110,7 +134,7 @@ const transactionFor = ({
   const capacityCondition = isConfirmed
     ? 'attribute_exists(activityId) AND #publicStatus = :publicStatus AND attribute_exists(#capacity) AND (attribute_not_exists(#confirmedCount) OR #confirmedCount < #capacity)'
     : 'attribute_exists(activityId) AND #publicStatus = :publicStatus AND attribute_exists(#capacity) AND ((attribute_not_exists(#confirmedCount) AND #capacity = :zero) OR #confirmedCount >= #capacity)';
-  const recruitmentCondition = `${capacityCondition} AND (attribute_not_exists(#recruitmentStatus) OR #recruitmentStatus = :open)`;
+  const recruitmentCondition = `${capacityCondition} AND (attribute_not_exists(#activityStatus) OR #activityStatus = :active) AND (attribute_not_exists(#recruitmentStatus) OR #recruitmentStatus = :open)`;
   const activityCondition = fields.openAt
     ? `${recruitmentCondition} AND attribute_exists(#openAt) AND #openAt <= :requestTime`
     : recruitmentCondition;
@@ -119,10 +143,12 @@ const transactionFor = ({
     '#capacity': fields.capacity,
     '#confirmedCount': fields.confirmedCount,
     '#count': countField,
+    '#activityStatus': 'activityStatus',
     '#recruitmentStatus': fields.recruitmentStatus
   };
   const expressionAttributeValues = {
     ':publicStatus': 'PUBLIC',
+    ':active': 'ACTIVE',
     ':open': 'OPEN',
     ':zero': 0,
     ':one': 1
@@ -196,9 +222,15 @@ export const createApplicationHandler = (
   const salt = saltFactory();
   const applicationId = uuid();
   const requestedAt = now();
+  const applicantKey = applicantKeyFor({
+    activityId,
+    applicantRole,
+    normalizedName,
+    password
+  });
   const application = {
     activityId,
-    applicantKey: `${applicantRole}#${normalizedName}`,
+    applicantKey,
     applicationId,
     applicantRole,
     name,
@@ -208,6 +240,27 @@ export const createApplicationHandler = (
     createdAt: requestedAt.toISOString()
   };
   const fields = roleFields[applicantRole];
+
+  try {
+    const legacyResult = await documentClient.send(new GetCommand({
+      TableName: applicationsTable,
+      Key: {
+        activityId,
+        applicantKey: legacyApplicantKey({ applicantRole, normalizedName })
+      },
+      ConsistentRead: true
+    }));
+
+    if (isActiveApplication(legacyResult.Item) && passwordMatches(password, legacyResult.Item)) {
+      return jsonResponse(409, { message: '이미 신청한 활동입니다.' });
+    }
+  } catch (error) {
+    console.error('Failed to check legacy application', {
+      name: error.name,
+      message: error.message
+    });
+    return jsonResponse(500, { message: '신청 내역을 확인하는 중 오류가 발생했습니다.' });
+  }
 
   try {
     await documentClient.send(transactionFor({

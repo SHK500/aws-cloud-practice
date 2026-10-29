@@ -6,6 +6,7 @@ import {
   QueryCommand,
   TransactWriteCommand
 } from '@aws-sdk/lib-dynamodb';
+import { applicantKeyFor, legacyApplicantKey } from './applicant-key.mjs';
 
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
@@ -282,7 +283,12 @@ export const createCancellationHandler = (
     password,
     confirmVacancy
   } = parsed.value;
-  const applicantKey = `${applicantRole}#${normalizedName}`;
+  const applicantKey = applicantKeyFor({
+    activityId,
+    applicantRole,
+    normalizedName,
+    password
+  });
 
   let application;
   try {
@@ -292,6 +298,55 @@ export const createCancellationHandler = (
       ConsistentRead: true
     }));
     application = result.Item;
+
+    if (!application) {
+      const legacyResult = await documentClient.send(new GetCommand({
+        TableName: applicationsTable,
+        Key: {
+          activityId,
+          applicantKey: legacyApplicantKey({ applicantRole, normalizedName })
+        },
+        ConsistentRead: true
+      }));
+      application = legacyResult.Item;
+    }
+
+    // An administrator can correct the visible name without changing the
+    // original DynamoDB key. In that case, locate the record by its current
+    // normalized name and verify the applicant's password below.
+    if (!application) {
+      const candidates = [];
+      let lastEvaluatedKey;
+
+      do {
+        const queryResult = await documentClient.send(new QueryCommand({
+          TableName: applicationsTable,
+          KeyConditionExpression: 'activityId = :activityId',
+          FilterExpression: 'applicantRole = :applicantRole AND normalizedName = :normalizedName',
+          ExpressionAttributeValues: {
+            ':activityId': activityId,
+            ':applicantRole': applicantRole,
+            ':normalizedName': normalizedName
+          },
+          ConsistentRead: true,
+          ExclusiveStartKey: lastEvaluatedKey
+        }));
+        candidates.push(...(queryResult.Items || []));
+        lastEvaluatedKey = queryResult.LastEvaluatedKey;
+      } while (lastEvaluatedKey);
+
+      const passwordMatchesForName = candidates.filter((candidate) =>
+        passwordMatches(password, candidate)
+      );
+
+      if (passwordMatchesForName.length === 1) {
+        [application] = passwordMatchesForName;
+      } else if (passwordMatchesForName.length > 1) {
+        return jsonResponse(409, {
+          message: '같은 이름과 비밀번호의 신청이 여러 건입니다. 임원진에게 문의해 주세요.'
+        });
+      }
+    }
   } catch (error) {
     console.error('Failed to load application for cancellation', {
       name: error.name,

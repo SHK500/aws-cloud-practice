@@ -252,6 +252,35 @@ Resources:
         Project: VolunteerClub
         Environment: dev
 
+  GetPublicApplicationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: public-applications.lambdaHandler
+      Description: Returns names and statuses for a public activity
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ActivitiesTableName}'
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !GetAtt ApplicationsTable.Arn
+      Events:
+        GetPublicApplications:
+          Type: Api
+          Properties:
+            Path: /activities/{activityId}/applications
+            Method: get
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
   CreateApplicationFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -269,6 +298,7 @@ Resources:
               Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ActivitiesTableName}'
             - Effect: Allow
               Action:
+                - dynamodb:GetItem
                 - dynamodb:PutItem
               Resource: !GetAtt ApplicationsTable.Arn
       Events:
@@ -340,6 +370,115 @@ Resources:
         Project: VolunteerClub
         Environment: dev
 
+  UpdateAdminApplicationNameFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: admin-application-name.lambdaHandler
+      Description: Updates an applicant display name for authenticated club admins
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ApplicationsTable.Arn
+      Events:
+        UpdateAdminApplicationName:
+          Type: Api
+          Properties:
+            Path: /admin/applications/name
+            Method: put
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+  UpdateAdminAttendanceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: admin-attendance.lambdaHandler
+      Description: Records attendance for a confirmed application
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ApplicationsTable.Arn
+      Events:
+        UpdateAdminAttendance:
+          Type: Api
+          Properties:
+            Path: /admin/applications/attendance
+            Method: put
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+  UpdateAdminActivityStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: admin-activity-status.lambdaHandler
+      Description: Cancels or restores an activity without deleting its application records
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ActivitiesTableName}'
+      Events:
+        UpdateAdminActivityStatus:
+          Type: Api
+          Properties:
+            Path: /admin/activities/{activityId}/cancellation
+            Method: put
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
+  GetAdminMonthlyStatsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: admin-monthly-stats.lambdaHandler
+      Description: Builds the monthly attendance leaderboard for authenticated club admins
+      Environment:
+        Variables:
+          APPLICATIONS_TABLE: !Ref ApplicationsTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+              Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ActivitiesTableName}'
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+              Resource: !GetAtt ApplicationsTable.Arn
+      Events:
+        GetAdminMonthlyStats:
+          Type: Api
+          Properties:
+            Path: /admin/stats/monthly
+            Method: get
+            Auth:
+              Authorizer: ClubAdminAuthorizer
+      Tags:
+        Project: VolunteerClub
+        Environment: dev
+
   AdminReplacementFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -353,6 +492,7 @@ Resources:
         - Statement:
             - Effect: Allow
               Action:
+                - dynamodb:Query
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt ApplicationsTable.Arn
@@ -394,6 +534,7 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:Query
+                - dynamodb:UpdateItem
                 - dynamodb:DeleteItem
               Resource: !GetAtt ApplicationsTable.Arn
       Events:
@@ -442,6 +583,9 @@ Outputs:
   ActivitiesApiUrl:
     Description: GET activities API endpoint
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/activities'
+  PublicApplicationsApiUrl:
+    Description: GET public activity applications API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/activities/{activityId}/applications'
   ApplicationsApiUrl:
     Description: POST applications API endpoint
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/applications'
@@ -451,6 +595,12 @@ Outputs:
   AdminApplicationsApiUrl:
     Description: Authenticated GET admin applications API endpoint
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/admin/applications'
+  AdminAttendanceApiUrl:
+    Description: Authenticated attendance update API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/admin/applications/attendance'
+  AdminMonthlyStatsApiUrl:
+    Description: Authenticated monthly attendance statistics API endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/admin/stats/monthly'
   AdminReplacementApiUrl:
     Description: Authenticated POST admin replacement API endpoint
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod/admin/applications/replacement'
@@ -469,6 +619,9 @@ Outputs:
   GetActivitiesFunctionArn:
     Description: Get activities Lambda function ARN
     Value: !GetAtt GetActivitiesFunction.Arn
+  GetPublicApplicationsFunctionArn:
+    Description: Get public activity applications Lambda function ARN
+    Value: !GetAtt GetPublicApplicationsFunction.Arn
   CreateApplicationFunctionArn:
     Description: Create application Lambda function ARN
     Value: !GetAtt CreateApplicationFunction.Arn

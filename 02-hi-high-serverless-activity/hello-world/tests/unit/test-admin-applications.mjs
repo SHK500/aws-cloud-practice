@@ -38,6 +38,8 @@ describe('GET /admin/applications', () => {
     assert.equal(result.statusCode, 200);
     assert.equal(body.count, 1);
     assert.equal(body.applications[0].name, '홍길동');
+    assert.equal(body.applications[0].applicantKey, 'MEMBER#홍길동');
+    assert.equal(body.applications[0].attendanceStatus, 'ATTENDED');
     assert.equal('passwordHash' in body.applications[0], false);
     assert.equal('passwordSalt' in body.applications[0], false);
   });

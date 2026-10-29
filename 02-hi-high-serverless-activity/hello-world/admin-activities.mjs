@@ -6,9 +6,9 @@ import {
   PutCommand,
   QueryCommand,
   ScanCommand,
-  TransactWriteCommand,
-  UpdateCommand
+  TransactWriteCommand
 } from '@aws-sdk/lib-dynamodb';
+import { newestActivityFirst } from './activity-order.mjs';
 
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
@@ -79,8 +79,8 @@ const parseBody = (event) => {
   if (!Number.isInteger(value.memberCapacity) || value.memberCapacity < 1 || value.memberCapacity > 500) {
     return { error: '일반 부원 정원은 1명 이상 500명 이하로 입력해 주세요.' };
   }
-  if (!Number.isInteger(value.reporterCapacity) || value.reporterCapacity < 1 || value.reporterCapacity > 100) {
-    return { error: '기자단 정원은 1명 이상 100명 이하로 입력해 주세요.' };
+  if (!Number.isInteger(value.reporterCapacity) || value.reporterCapacity < 0 || value.reporterCapacity > 100) {
+    return { error: '기자단 정원은 0명 이상 100명 이하로 입력해 주세요.' };
   }
   if (!value.memberOpenAt || Number.isNaN(Date.parse(value.memberOpenAt))) {
     return { error: '올바른 일반 신청 시작 시각을 입력해 주세요.' };
@@ -111,6 +111,8 @@ const adminActivity = (activity) => ({
   publicStatus: activity.publicStatus,
   memberRecruitmentStatus: activity.memberRecruitmentStatus || 'OPEN',
   reporterRecruitmentStatus: activity.reporterRecruitmentStatus || 'OPEN',
+  activityStatus: activity.activityStatus || 'ACTIVE',
+  activityCancelledAt: activity.activityCancelledAt,
   confirmedCount: activity.confirmedCount || 0,
   reporterCount: activity.reporterCount || 0,
   memberWaitlistCount: activity.memberWaitlistCount || 0,
@@ -132,7 +134,7 @@ const listActivities = async (documentClient, tableName) => {
 
   return activities
     .map(adminActivity)
-    .sort((a, b) => `${a.activityDate}T${a.startTime}`.localeCompare(`${b.activityDate}T${b.startTime}`));
+    .sort(newestActivityFirst);
 };
 
 const createActivityId = (activityDate, randomFactory) =>
@@ -171,6 +173,35 @@ const listApplicationKeys = async (documentClient, applicationsTable, activityId
     lastEvaluatedKey = result.LastEvaluatedKey;
   } while (lastEvaluatedKey);
   return keys;
+};
+
+const listWaitlistedMembers = async (documentClient, applicationsTable, activityId) => {
+  const applications = [];
+  let lastEvaluatedKey;
+  do {
+    const result = await documentClient.send(new QueryCommand({
+      TableName: applicationsTable,
+      KeyConditionExpression: 'activityId = :activityId',
+      FilterExpression: 'applicantRole = :member AND #status = :waitlisted',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: {
+        ':activityId': activityId,
+        ':member': 'MEMBER',
+        ':waitlisted': 'WAITLISTED'
+      },
+      ProjectionExpression: 'activityId, applicantKey, applicationId, createdAt',
+      ConsistentRead: true,
+      ExclusiveStartKey: lastEvaluatedKey
+    }));
+    applications.push(...(result.Items || []));
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return applications.sort((a, b) => {
+    const createdOrder = String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+    if (createdOrder !== 0) return createdOrder;
+    return String(a.applicationId || '').localeCompare(String(b.applicationId || ''));
+  });
 };
 
 export const createAdminActivitiesHandler = (
@@ -295,6 +326,7 @@ export const createAdminActivitiesHandler = (
       reporterCount: 0,
       memberWaitlistCount: 0,
       reporterWaitlistCount: 0,
+      activityStatus: 'ACTIVE',
       createdAt: timestamp,
       createdBy: adminEmail,
       updatedAt: timestamp,
@@ -326,46 +358,133 @@ export const createAdminActivitiesHandler = (
     return jsonResponse(400, { message: '올바른 활동 ID가 아닙니다.' });
   }
 
+  if (!applicationsTable) {
+    console.error('APPLICATIONS_TABLE environment variable is missing');
+    return jsonResponse(500, { message: '서버 설정 오류가 발생했습니다.' });
+  }
+
   const names = {
     '#name': 'name',
     '#type': 'type',
-    '#publicStatus': 'publicStatus'
-  };
-  const values = {
-    ':name': parsed.value.name,
-    ':type': parsed.value.type,
-    ':activityDate': parsed.value.activityDate,
-    ':startTime': parsed.value.startTime,
-    ':place': parsed.value.place,
-    ':memberCapacity': parsed.value.memberCapacity,
-    ':reporterCapacity': parsed.value.reporterCapacity,
-    ':memberOpenAt': parsed.value.memberOpenAt,
-    ':publicStatus': parsed.value.publicStatus,
-    ':memberRecruitmentStatus': parsed.value.memberRecruitmentStatus,
-    ':reporterRecruitmentStatus': parsed.value.reporterRecruitmentStatus,
-    ':updatedAt': timestamp,
-    ':updatedBy': adminEmail
+    '#publicStatus': 'publicStatus',
+    '#status': 'status'
   };
 
   try {
-    const result = await documentClient.send(new UpdateCommand({
+    const currentResult = await documentClient.send(new GetCommand({
       TableName: tableName,
       Key: { activityId },
-      UpdateExpression: 'SET #name = :name, #type = :type, activityDate = :activityDate, startTime = :startTime, place = :place, memberCapacity = :memberCapacity, reporterCapacity = :reporterCapacity, memberOpenAt = :memberOpenAt, #publicStatus = :publicStatus, memberRecruitmentStatus = :memberRecruitmentStatus, reporterRecruitmentStatus = :reporterRecruitmentStatus, updatedAt = :updatedAt, updatedBy = :updatedBy',
-      ConditionExpression: 'attribute_exists(activityId) AND (attribute_not_exists(confirmedCount) OR confirmedCount <= :memberCapacity) AND (attribute_not_exists(reporterCount) OR reporterCount <= :reporterCapacity)',
-      ExpressionAttributeNames: names,
-      ExpressionAttributeValues: values,
-      ReturnValues: 'ALL_NEW'
+      ConsistentRead: true
     }));
-    console.info('Admin activity updated', { adminEmail, activityId });
+    const current = currentResult.Item;
+    if (!current) {
+      return jsonResponse(404, { message: '수정할 활동을 찾을 수 없습니다.' });
+    }
+
+    const confirmedCount = Number(current.confirmedCount || 0);
+    const reporterCount = Number(current.reporterCount || 0);
+    const storedWaitlistCount = Number(current.memberWaitlistCount || 0);
+    if (parsed.value.memberCapacity < confirmedCount
+      || parsed.value.reporterCapacity < reporterCount) {
+      return jsonResponse(409, {
+        message: '현재 확정 인원보다 정원을 작게 설정할 수 없습니다.'
+      });
+    }
+
+    const waiting = await listWaitlistedMembers(documentClient, applicationsTable, activityId);
+    const availableSlots = Math.max(0, parsed.value.memberCapacity - confirmedCount);
+    const promoted = waiting.slice(0, availableSlots);
+    if (promoted.length > 99) {
+      return jsonResponse(409, {
+        message: '한 번에 승격할 대기자가 너무 많습니다. 정원을 나누어 늘려 주세요.'
+      });
+    }
+
+    const updatedConfirmedCount = confirmedCount + promoted.length;
+    const updatedWaitlistCount = Math.max(0, waiting.length - promoted.length);
+    const values = {
+      ':name': parsed.value.name,
+      ':type': parsed.value.type,
+      ':activityDate': parsed.value.activityDate,
+      ':startTime': parsed.value.startTime,
+      ':place': parsed.value.place,
+      ':memberCapacity': parsed.value.memberCapacity,
+      ':reporterCapacity': parsed.value.reporterCapacity,
+      ':memberOpenAt': parsed.value.memberOpenAt,
+      ':publicStatus': parsed.value.publicStatus,
+      ':memberRecruitmentStatus': parsed.value.memberRecruitmentStatus,
+      ':reporterRecruitmentStatus': parsed.value.reporterRecruitmentStatus,
+      ':updatedAt': timestamp,
+      ':updatedBy': adminEmail,
+      ':expectedConfirmedCount': confirmedCount,
+      ':expectedReporterCount': reporterCount,
+      ':expectedWaitlistCount': storedWaitlistCount,
+      ':updatedConfirmedCount': updatedConfirmedCount,
+      ':updatedWaitlistCount': updatedWaitlistCount
+    };
+
+    await documentClient.send(new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: tableName,
+            Key: { activityId },
+            UpdateExpression: 'SET #name = :name, #type = :type, activityDate = :activityDate, startTime = :startTime, place = :place, memberCapacity = :memberCapacity, reporterCapacity = :reporterCapacity, memberOpenAt = :memberOpenAt, #publicStatus = :publicStatus, memberRecruitmentStatus = :memberRecruitmentStatus, reporterRecruitmentStatus = :reporterRecruitmentStatus, confirmedCount = :updatedConfirmedCount, memberWaitlistCount = :updatedWaitlistCount, updatedAt = :updatedAt, updatedBy = :updatedBy',
+            ConditionExpression: 'attribute_exists(activityId) AND confirmedCount = :expectedConfirmedCount AND reporterCount = :expectedReporterCount AND memberWaitlistCount = :expectedWaitlistCount',
+            ExpressionAttributeNames: {
+              '#name': names['#name'],
+              '#type': names['#type'],
+              '#publicStatus': names['#publicStatus']
+            },
+            ExpressionAttributeValues: values
+          }
+        },
+        ...promoted.map((application) => ({
+          Update: {
+            TableName: applicationsTable,
+            Key: {
+              activityId: application.activityId,
+              applicantKey: application.applicantKey
+            },
+            UpdateExpression: 'SET #status = :confirmed, promotedAt = :promotedAt, promotedByAdmin = :promotedByAdmin',
+            ConditionExpression: 'applicationId = :applicationId AND #status = :waitlisted',
+            ExpressionAttributeNames: { '#status': names['#status'] },
+            ExpressionAttributeValues: {
+              ':confirmed': 'CONFIRMED',
+              ':waitlisted': 'WAITLISTED',
+              ':applicationId': application.applicationId,
+              ':promotedAt': timestamp,
+              ':promotedByAdmin': adminEmail
+            }
+          }
+        }))
+      ]
+    }));
+
+    const updatedActivity = {
+      ...current,
+      ...parsed.value,
+      confirmedCount: updatedConfirmedCount,
+      memberWaitlistCount: updatedWaitlistCount,
+      updatedAt: timestamp,
+      updatedBy: adminEmail
+    };
+    console.info('Admin activity updated', {
+      adminEmail,
+      activityId,
+      promotedWaitlistedMembers: promoted.length
+    });
     return jsonResponse(200, {
-      message: '활동이 수정되었습니다.',
-      activity: adminActivity(result.Attributes)
+      message: promoted.length
+        ? `활동이 수정되었고 대기자 ${promoted.length}명이 확정으로 승격되었습니다.`
+        : '활동이 수정되었습니다.',
+      promotedWaitlistedMembers: promoted.length,
+      activity: adminActivity(updatedActivity)
     });
   } catch (error) {
-    if (error?.name === 'ConditionalCheckFailedException') {
+    if (['ConditionalCheckFailedException', 'TransactionCanceledException'].includes(error?.name)) {
       return jsonResponse(409, {
-        message: '활동을 찾을 수 없거나 현재 확정 인원보다 정원을 작게 설정했습니다.'
+        message: '수정 중 신청 인원이 변경되었습니다. 목록을 새로고침한 뒤 다시 저장해 주세요.'
       });
     }
     console.error('Failed to update admin activity', { name: error.name, message: error.message });

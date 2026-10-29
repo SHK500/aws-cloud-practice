@@ -177,6 +177,7 @@ Temporary Items
 # Docs: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-reference.html
 
 **/.aws-sam
+.codex-npm-cache/
 .sam-appdata/
 hello-world/.npm-cache/
 web/.npm-cache/

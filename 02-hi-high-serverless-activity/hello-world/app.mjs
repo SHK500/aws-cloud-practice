@@ -1,5 +1,6 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { newestActivityFirst } from './activity-order.mjs';
 
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
@@ -29,12 +30,14 @@ export const createHandler = (
       const result = await documentClient.send(new ScanCommand({
         TableName: tableName,
         ExclusiveStartKey: lastEvaluatedKey,
-        FilterExpression: '#publicStatus = :publicStatus',
+        FilterExpression: '#publicStatus = :publicStatus AND (attribute_not_exists(#activityStatus) OR #activityStatus <> :cancelled)',
         ExpressionAttributeNames: {
-          '#publicStatus': 'publicStatus'
+          '#publicStatus': 'publicStatus',
+          '#activityStatus': 'activityStatus'
         },
         ExpressionAttributeValues: {
-          ':publicStatus': 'PUBLIC'
+          ':publicStatus': 'PUBLIC',
+          ':cancelled': 'CANCELLED'
         }
       }));
 
@@ -43,6 +46,7 @@ export const createHandler = (
     } while (lastEvaluatedKey);
 
     const publicActivities = activities
+      .sort(newestActivityFirst)
       .map((activity) => ({
         activityId: activity.activityId,
         name: activity.name,
@@ -58,12 +62,7 @@ export const createHandler = (
         reporterRecruitmentStatus: activity.reporterRecruitmentStatus || 'OPEN',
         confirmedCount: activity.confirmedCount || 0,
         reporterCount: activity.reporterCount || 0
-      }))
-      .sort((a, b) => {
-        const aKey = `${a.activityDate || ''}T${a.startTime || ''}`;
-        const bKey = `${b.activityDate || ''}T${b.startTime || ''}`;
-        return aKey.localeCompare(bKey);
-      });
+      }));
 
     return jsonResponse(200, {
       count: publicActivities.length,

@@ -17,6 +17,7 @@ const state = {
   activities: [],
   adminActivities: [],
   adminApplications: [],
+  monthlyStats: null,
   selectedRole: 'MEMBER',
   selectedType: 'ALL',
   selectedActivity: null,
@@ -31,11 +32,12 @@ const ids = [
   'applicationDialog', 'applicationForm', 'applicationDialogTitle', 'applicationDialogDescription',
   'applicationName', 'applicationPassword', 'applicationFormMessage', 'cancelDialog', 'cancelForm',
   'cancelDialogDescription', 'cancelName', 'cancelPassword', 'cancelFormMessage', 'resultDialog',
+  'rosterDialog', 'rosterTitle', 'rosterDescription', 'rosterMessage', 'rosterContent',
   'resultIcon', 'resultTitle', 'resultMessage', 'resultDetails', 'toast', 'adminLoginPanel',
   'adminLoginForm', 'adminEmail', 'adminPassword', 'adminLoginMessage', 'adminDashboard',
   'adminCount', 'replacementCount', 'adminActivityFilter', 'adminStatusFilter', 'adminRoleFilter',
   'adminRefreshButton', 'adminLogoutButton', 'adminMessage', 'adminApplicationsBody',
-  'adminApplicationsPanel', 'adminActivitiesPanel', 'newActivityButton', 'adminActivitiesMessage',
+  'adminApplicationsPanel', 'adminActivitiesPanel', 'adminMonthlyPanel', 'newActivityButton', 'adminActivitiesMessage',
   'adminActivitiesList', 'activityDialog', 'activityForm', 'activityDialogTitle', 'activityName',
   'activityType', 'activityDate', 'activityStartTime', 'activityPlace', 'activityMemberCapacity',
   'activityReporterCapacity', 'activityMemberOpenAt', 'activityPublicStatus',
@@ -45,13 +47,16 @@ const ids = [
   , 'exportCsvButton', 'replacementDialog', 'replacementForm', 'replacementDescription',
   'replacementName', 'replacementPassword', 'replacementFormMessage', 'activityDeleteDialog',
   'activityDeleteForm', 'activityDeleteDescription', 'activityDeleteConfirmation',
-  'activityDeleteFormMessage'
+  'activityDeleteFormMessage', 'monthlyStatsMonth',
+  'monthlyStatsRefreshButton', 'monthlyStatsCsvButton', 'monthlyStatsSummary',
+  'monthlyStatsMessage', 'monthlyStatsBody'
 ];
 const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
 
 const roleLabel = (role) => role === 'REPORTER' ? '기자단' : '일반 부원';
 const typeLabel = (type) => ({ VOLUNTEER: '봉사', BUCKET: '버킷', 봉사: '봉사', 버킷: '버킷' })[type] || type || '활동';
-const statusLabel = (status) => ({ CONFIRMED: '확정', WAITLISTED: '대기', CANCELLED: '취소', REPLACEMENT_NEEDED: '대타 필요' })[status] || status || '-';
+const statusLabel = (status) => ({ CONFIRMED: '확정', WAITLISTED: '대기', CANCELLED: '취소', REPLACEMENT_NEEDED: '대타 필요', ACTIVITY_CANCELLED: '활동 취소' })[status] || status || '-';
+const attendanceLabel = (status) => status === 'ABSENT' ? '불참' : '참여';
 const recruitmentLabel = (status) => status === 'CLOSED' ? '모집 마감' : '모집 중';
 
 const escapeHtml = (value) => String(value ?? '')
@@ -145,7 +150,7 @@ const renderActivities = () => {
       <dl class="activity-meta"><div><dt>일정</dt><dd>${escapeHtml(formatDate(activity.activityDate))} ${escapeHtml(activity.startTime || '')}</dd></div><div><dt>장소</dt><dd>${escapeHtml(activity.place || '추후 공지')}</dd></div><div><dt>구분</dt><dd>${escapeHtml(roleLabel(state.selectedRole))}</dd></div></dl>
       <div class="capacity-row"><span>신청 현황</span><strong>${availability.count} / ${availability.capacity}명</strong></div>
       <div class="progress" aria-hidden="true"><span style="width:${percent}%"></span></div>${openText}
-      <div class="card-actions"><button class="primary-button" type="button" data-apply="${escapeHtml(activity.activityId)}" ${availability.available ? '' : 'disabled'}>${escapeHtml(availability.action)}</button><button class="secondary-button" type="button" data-cancel="${escapeHtml(activity.activityId)}">신청 취소</button></div>
+      <div class="card-actions"><button class="primary-button" type="button" data-apply="${escapeHtml(activity.activityId)}" ${availability.available ? '' : 'disabled'}>${escapeHtml(availability.action)}</button><button class="secondary-button" type="button" data-roster="${escapeHtml(activity.activityId)}">신청 현황</button><button class="secondary-button" type="button" data-cancel="${escapeHtml(activity.activityId)}">신청 취소</button></div>
     </article>`;
   }).join('');
 };
@@ -164,6 +169,44 @@ const loadActivities = async () => {
 };
 
 const publicActivityById = (activityId) => state.activities.find((item) => item.activityId === activityId);
+
+const renderRosterGroup = (title, applicants, emptyMessage) => `
+  <section class="roster-group">
+    <div class="roster-group-heading"><h3>${escapeHtml(title)}</h3><span>${applicants.length}명</span></div>
+    ${applicants.length
+    ? `<ol class="roster-list">${applicants.map((applicant) => `<li><span>${escapeHtml(applicant.name)}</span></li>`).join('')}</ol>`
+    : `<p class="roster-empty">${escapeHtml(emptyMessage)}</p>`}
+  </section>`;
+
+const openRoster = async (activityId) => {
+  const activity = publicActivityById(activityId);
+  if (!activity) return;
+
+  const applicantRole = state.selectedRole;
+  elements.rosterTitle.textContent = activity.name;
+  elements.rosterDescription.textContent = `${roleLabel(applicantRole)} 신청자 명단`;
+  elements.rosterMessage.textContent = '신청자 명단을 불러오는 중입니다.';
+  elements.rosterMessage.classList.remove('hidden');
+  elements.rosterContent.innerHTML = '';
+  elements.rosterDialog.showModal();
+
+  try {
+    const data = await apiRequest(
+      `/activities/${encodeURIComponent(activityId)}/applications?applicantRole=${encodeURIComponent(applicantRole)}`
+    );
+    const confirmed = data.confirmed || [];
+    const waitlisted = data.waitlisted || [];
+
+    elements.rosterContent.innerHTML =
+      renderRosterGroup('확정', confirmed, '아직 확정된 신청자가 없습니다.')
+      + (applicantRole === 'MEMBER'
+        ? renderRosterGroup('대기', waitlisted, '현재 대기자가 없습니다.')
+        : '');
+    elements.rosterMessage.classList.add('hidden');
+  } catch (error) {
+    elements.rosterMessage.textContent = `${error.message} 잠시 후 다시 시도해 주세요.`;
+  }
+};
 
 const openApplication = (activityId) => {
   state.selectedActivity = publicActivityById(activityId);
@@ -223,7 +266,8 @@ const setActiveFilter = (container, target, attribute) => container.querySelecto
 const showAdminDashboard = async () => {
   elements.adminLoginPanel.classList.add('hidden');
   elements.adminDashboard.classList.remove('hidden');
-  await Promise.all([loadAdminActivities(), loadAdminApplications()]);
+  await loadAdminActivities();
+  await loadAdminApplications();
 };
 
 const openAdminView = async () => {
@@ -306,22 +350,33 @@ const cancelNewPassword = async () => {
 };
 
 const adminActivityById = (activityId) => state.adminActivities.find((item) => item.activityId === activityId);
+const isActivityCancelled = (activityId) => adminActivityById(activityId)?.activityStatus === 'CANCELLED';
 
 const renderAdminActivityOptions = () => {
   const selected = elements.adminActivityFilter.value;
-  elements.adminActivityFilter.innerHTML = '<option value="">전체 활동</option>' + state.adminActivities.map((activity) => `<option value="${escapeHtml(activity.activityId)}">${escapeHtml(activity.name)}${activity.publicStatus === 'PRIVATE' ? ' (비공개)' : ''}</option>`).join('');
+  elements.adminActivityFilter.innerHTML = '<option value="">전체 활동</option>' + state.adminActivities.map((activity) => `<option value="${escapeHtml(activity.activityId)}">${escapeHtml(activity.name)}${activity.activityStatus === 'CANCELLED' ? ' (활동 취소)' : activity.publicStatus === 'PRIVATE' ? ' (비공개)' : ''}</option>`).join('');
   elements.adminActivityFilter.value = selected;
 };
 
 const loadAdminApplications = async () => {
   elements.adminMessage.textContent = '신청자 목록을 불러오는 중입니다.'; elements.adminApplicationsBody.innerHTML = '';
   try {
-    const query = new URLSearchParams();
-    if (elements.adminActivityFilter.value) query.set('activityId', elements.adminActivityFilter.value);
-    if (elements.adminStatusFilter.value) query.set('status', elements.adminStatusFilter.value);
-    if (elements.adminRoleFilter.value) query.set('applicantRole', elements.adminRoleFilter.value);
-    const data = await adminRequest(`/admin/applications${query.toString() ? `?${query}` : ''}`);
-    state.adminApplications = data.applications || [];
+    const applications = [];
+    let nextToken = '';
+
+    do {
+      const query = new URLSearchParams({ limit: '100' });
+      if (elements.adminActivityFilter.value) query.set('activityId', elements.adminActivityFilter.value);
+      if (elements.adminStatusFilter.value) query.set('status', elements.adminStatusFilter.value);
+      if (elements.adminRoleFilter.value) query.set('applicantRole', elements.adminRoleFilter.value);
+      if (nextToken) query.set('nextToken', nextToken);
+
+      const data = await adminRequest(`/admin/applications?${query}`);
+      applications.push(...(data.applications || []));
+      nextToken = data.nextToken || '';
+    } while (nextToken);
+
+    state.adminApplications = applications;
     renderAdminApplications();
   } catch (error) { elements.adminMessage.textContent = error.message; }
 };
@@ -329,15 +384,103 @@ const loadAdminApplications = async () => {
 const renderAdminApplications = () => {
   const applications = state.adminApplications;
   elements.adminCount.textContent = String(applications.length);
-  elements.replacementCount.textContent = String(applications.filter((item) => item.status === 'REPLACEMENT_NEEDED').length);
+  elements.replacementCount.textContent = String(applications.filter((item) => item.status === 'REPLACEMENT_NEEDED' && !isActivityCancelled(item.activityId)).length);
   elements.adminMessage.textContent = applications.length ? `신청 ${applications.length}건을 조회했습니다.` : '조건에 맞는 신청이 없습니다.';
-  elements.adminApplicationsBody.innerHTML = applications.map((application) => {
+
+  const grouped = new Map([
+    ['CONFIRMED', []],
+    ['WAITLISTED', []],
+    ['REPLACEMENT_NEEDED', []],
+    ['CANCELLED', []],
+    ['ACTIVITY_CANCELLED', []]
+  ]);
+
+  applications.forEach((application) => {
+    const displayStatus = isActivityCancelled(application.activityId)
+      ? 'ACTIVITY_CANCELLED'
+      : application.status;
+    if (!grouped.has(displayStatus)) grouped.set(displayStatus, []);
+    grouped.get(displayStatus).push({ ...application, displayStatus });
+  });
+
+  const renderApplicationRow = (application) => {
     const activity = adminActivityById(application.activityId) || publicActivityById(application.activityId);
-    const replacementAction = application.status === 'REPLACEMENT_NEEDED'
+    const activityCancelled = application.displayStatus === 'ACTIVITY_CANCELLED';
+    const replacementAction = application.status === 'REPLACEMENT_NEEDED' && !activityCancelled
       ? `<button class="secondary-button compact-button" type="button" data-assign-replacement="${escapeHtml(application.applicationId)}">대타 확정</button>`
-      : '-';
-    return `<tr><td><strong>${escapeHtml(activity?.name || application.activityId)}</strong></td><td>${escapeHtml(roleLabel(application.applicantRole))}</td><td>${escapeHtml(application.name)}</td><td><span class="status-pill ${escapeHtml(application.status.toLowerCase())}">${escapeHtml(statusLabel(application.status))}</span></td><td>${escapeHtml(formatDateTime(application.createdAt))}</td><td>${replacementAction}</td></tr>`;
-  }).join('');
+      : '';
+    const editNameAction = `<button class="secondary-button compact-button" type="button" data-edit-application-name="${escapeHtml(application.applicationId)}">이름 수정</button>`;
+    const attendanceStatus = application.attendanceStatus === 'ABSENT' ? 'ABSENT' : 'ATTENDED';
+    const attendanceControl = application.status === 'CONFIRMED' && !activityCancelled
+      ? `<select class="attendance-select ${escapeHtml(attendanceStatus.toLowerCase())}" data-attendance-application="${escapeHtml(application.applicationId)}" aria-label="${escapeHtml(application.name)} 출석 상태"><option value="ATTENDED" ${attendanceStatus === 'ATTENDED' ? 'selected' : ''}>참여</option><option value="ABSENT" ${attendanceStatus === 'ABSENT' ? 'selected' : ''}>불참</option></select>`
+      : '<span class="muted-text">-</span>';
+    return `<tr><td><strong>${escapeHtml(activity?.name || application.activityId)}</strong></td><td>${escapeHtml(roleLabel(application.applicantRole))}</td><td>${escapeHtml(application.name)}</td><td><span class="status-pill ${escapeHtml(application.displayStatus.toLowerCase())}">${escapeHtml(statusLabel(application.displayStatus))}</span></td><td>${attendanceControl}</td><td>${escapeHtml(formatDateTime(application.createdAt))}</td><td><span class="table-actions">${editNameAction}${replacementAction}</span></td></tr>`;
+  };
+
+  elements.adminApplicationsBody.innerHTML = [...grouped.entries()]
+    .filter(([, items]) => items.length)
+    .map(([status, items]) => {
+      const sortedItems = [...items].sort((a, b) =>
+        String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+      );
+      return `<tr class="application-group-heading ${escapeHtml(status.toLowerCase())}"><td colspan="7"><strong>${escapeHtml(statusLabel(status))}</strong><span>${items.length}명</span></td></tr>${sortedItems.map(renderApplicationRow).join('')}`;
+    })
+    .join('');
+};
+
+const updateAttendance = async (applicationId, attendanceStatus, select) => {
+  const application = state.adminApplications.find((item) => item.applicationId === applicationId);
+  if (!application) return;
+  const previousStatus = application.attendanceStatus === 'ABSENT' ? 'ABSENT' : 'ATTENDED';
+  select.disabled = true;
+
+  try {
+    const data = await adminRequest('/admin/applications/attendance', {
+      method: 'PUT',
+      body: JSON.stringify({
+        activityId: application.activityId,
+        applicantKey: application.applicantKey,
+        applicationId: application.applicationId,
+        attendanceStatus
+      })
+    });
+    application.attendanceStatus = attendanceStatus;
+    select.className = `attendance-select ${attendanceStatus.toLowerCase()}`;
+    showToast(data.message);
+  } catch (error) {
+    select.value = previousStatus;
+    select.className = `attendance-select ${previousStatus.toLowerCase()}`;
+    showToast(error.message || '출석 상태를 저장하지 못했습니다.');
+  } finally {
+    select.disabled = false;
+  }
+};
+
+const editApplicationName = async (applicationId) => {
+  const application = state.adminApplications.find((item) => item.applicationId === applicationId);
+  if (!application) return;
+
+  const nextName = window.prompt(
+    '수정할 이름을 입력하세요. 동명이인은 김성현 (고려대)처럼 구분해 주세요.',
+    application.name
+  );
+  if (nextName === null || nextName.trim() === application.name) return;
+
+  try {
+    const data = await adminRequest('/admin/applications/name', {
+      method: 'PUT',
+      body: JSON.stringify({
+        activityId: application.activityId,
+        applicantKey: application.applicantKey,
+        applicationId: application.applicationId,
+        name: nextName
+      })
+    });
+    showToast(data.message);
+    await Promise.all([loadAdminApplications(), loadActivities()]);
+  } catch (error) {
+    showToast(error.message || '신청자 이름을 수정하지 못했습니다.');
+  }
 };
 
 const csvCell = (value) => {
@@ -369,15 +512,17 @@ const exportApplicationsCsv = async () => {
   try {
     const applications = await loadAllApplicationsForExport();
     if (!applications.length) throw new Error('다운로드할 신청자가 없습니다.');
-    const headers = ['활동 ID', '활동명', '신청 구분', '이름', '상태', '접수 시각', '취소 시각', '대기 승격 시각', '대타 확정 시각'];
+    const headers = ['활동 ID', '활동명', '신청 구분', '이름', '상태', '출석', '접수 시각', '취소 시각', '대기 승격 시각', '대타 확정 시각'];
     const rows = applications.map((application) => {
       const activity = adminActivityById(application.activityId) || publicActivityById(application.activityId);
+      const displayStatus = isActivityCancelled(application.activityId) ? 'ACTIVITY_CANCELLED' : application.status;
       return [
         application.activityId,
         activity?.name || '',
         roleLabel(application.applicantRole),
         application.name,
-        statusLabel(application.status),
+        statusLabel(displayStatus),
+        application.status === 'CONFIRMED' && displayStatus !== 'ACTIVITY_CANCELLED' ? attendanceLabel(application.attendanceStatus) : '-',
         application.createdAt || '',
         application.cancelledAt || '',
         application.promotedAt || '',
@@ -399,6 +544,86 @@ const exportApplicationsCsv = async () => {
     showToast(`신청자 ${applications.length}명의 CSV를 만들었습니다.`);
   } catch (error) {
     showToast(error.message || 'CSV 파일을 만들지 못했습니다.');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'CSV 다운로드';
+  }
+};
+
+const renderMonthlyStats = (data) => {
+  const winners = data.mvp || [];
+  const winnerText = winners.length
+    ? winners.map((item) => `${item.name} (${item.count}회)`).join(', ')
+    : '아직 참여 기록이 없습니다.';
+
+  elements.monthlyStatsSummary.innerHTML = `
+    <article class="mvp-card"><span>월간 MVP</span><strong>${escapeHtml(winnerText)}</strong></article>
+    <article><span>집계 활동</span><strong>${data.activityCount}개</strong></article>
+    <article><span>참여</span><strong>${data.attendedCount}건</strong></article>
+    <article><span>불참</span><strong>${data.absentCount}건</strong></article>`;
+
+  elements.monthlyStatsBody.innerHTML = (data.leaderboard || []).map((person) => `
+    <tr class="${person.rank === 1 ? 'mvp-row' : ''}">
+      <td><strong>${person.rank === 1 ? '🏆 ' : ''}${person.rank}위</strong></td>
+      <td>${escapeHtml(person.name)}</td>
+      <td><strong>${person.count}회</strong></td>
+    </tr>`).join('');
+
+  elements.monthlyStatsMessage.textContent = data.leaderboard?.length
+    ? `${data.month} 기준 ${data.leaderboard.length}명의 통합 참여 기록입니다. 동점자는 공동 순위입니다.`
+    : `${data.month}에 참여로 처리된 기록이 없습니다.`;
+};
+
+const loadMonthlyStats = async () => {
+  const month = elements.monthlyStatsMonth.value;
+  if (!month) {
+    elements.monthlyStatsMessage.textContent = '조회할 월을 선택해 주세요.';
+    return null;
+  }
+
+  elements.monthlyStatsMessage.textContent = '월간 통계를 불러오는 중입니다.';
+  elements.monthlyStatsBody.innerHTML = '';
+  try {
+    const query = new URLSearchParams({ month });
+    const data = await adminRequest(`/admin/stats/monthly?${query}`);
+    state.monthlyStats = data;
+    renderMonthlyStats(data);
+    return data;
+  } catch (error) {
+    state.monthlyStats = null;
+    elements.monthlyStatsSummary.innerHTML = '';
+    elements.monthlyStatsMessage.textContent = error.message;
+    return null;
+  }
+};
+
+const exportMonthlyStatsCsv = async () => {
+  const button = elements.monthlyStatsCsvButton;
+  button.disabled = true;
+  button.textContent = '파일 만드는 중…';
+
+  try {
+    const data = await loadMonthlyStats();
+    if (!data?.leaderboard?.length) throw new Error('다운로드할 참여 기록이 없습니다.');
+    const headers = ['순위', '이름', '참여 횟수'];
+    const rows = data.leaderboard.map((person) => [
+      person.rank,
+      person.name,
+      person.count
+    ].map(csvCell).join(','));
+    const csv = `\uFEFF${headers.map(csvCell).join(',')}\r\n${rows.join('\r\n')}`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `월간MVP_${data.month}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    showToast('월간 MVP 통계 CSV를 만들었습니다.');
+  } catch (error) {
+    showToast(error.message || '월간 통계 CSV를 만들지 못했습니다.');
   } finally {
     button.disabled = false;
     button.textContent = 'CSV 다운로드';
@@ -451,14 +676,38 @@ const submitReplacement = async (event) => {
 
 const renderAdminActivities = () => {
   elements.adminActivitiesMessage.textContent = state.adminActivities.length ? `활동 ${state.adminActivities.length}개를 관리할 수 있습니다.` : '등록된 활동이 없습니다.';
-  elements.adminActivitiesList.innerHTML = state.adminActivities.map((activity) => `<article class="admin-activity-card">
-    <div class="admin-activity-main"><div class="admin-activity-badges"><span class="type-badge ${activity.type === 'BUCKET' ? 'bucket' : ''}">${escapeHtml(typeLabel(activity.type))}</span><span class="manage-pill ${activity.publicStatus === 'PUBLIC' ? 'public' : 'private'}">${activity.publicStatus === 'PUBLIC' ? '공개' : '비공개'}</span></div><h3>${escapeHtml(activity.name)}</h3><p>${escapeHtml(formatDate(activity.activityDate))} ${escapeHtml(activity.startTime)} · ${escapeHtml(activity.place)}</p></div>
+  elements.adminActivitiesList.innerHTML = state.adminActivities.map((activity) => `<article class="admin-activity-card ${activity.activityStatus === 'CANCELLED' ? 'cancelled' : ''}">
+    <div class="admin-activity-main"><div class="admin-activity-badges"><span class="type-badge ${activity.type === 'BUCKET' ? 'bucket' : ''}">${escapeHtml(typeLabel(activity.type))}</span><span class="manage-pill ${activity.publicStatus === 'PUBLIC' ? 'public' : 'private'}">${activity.publicStatus === 'PUBLIC' ? '공개' : '비공개'}</span>${activity.activityStatus === 'CANCELLED' ? '<span class="manage-pill cancelled">활동 취소</span>' : ''}</div><h3>${escapeHtml(activity.name)}</h3><p>${escapeHtml(formatDate(activity.activityDate))} ${escapeHtml(activity.startTime)} · ${escapeHtml(activity.place)}</p></div>
     <div class="admin-activity-counts"><span>일반 <strong>${activity.confirmedCount || 0}/${activity.memberCapacity}</strong> · ${escapeHtml(recruitmentLabel(activity.memberRecruitmentStatus))}</span><span>기자단 <strong>${activity.reporterCount || 0}/${activity.reporterCapacity}</strong> · ${escapeHtml(recruitmentLabel(activity.reporterRecruitmentStatus))}</span></div>
     <div class="admin-activity-actions">
       <button class="secondary-button" type="button" data-edit-activity="${escapeHtml(activity.activityId)}">수정</button>
+      <button class="${activity.activityStatus === 'CANCELLED' ? 'secondary-button' : 'danger-outline-button'}" type="button" data-cancel-activity="${escapeHtml(activity.activityId)}">${activity.activityStatus === 'CANCELLED' ? '취소 해제' : '활동 취소'}</button>
       <button class="danger-outline-button" type="button" data-delete-activity="${escapeHtml(activity.activityId)}">삭제</button>
     </div>
   </article>`).join('');
+};
+
+const toggleActivityCancellation = async (activityId) => {
+  const activity = adminActivityById(activityId);
+  if (!activity) return;
+  const cancelled = activity.activityStatus === 'CANCELLED';
+  const confirmed = window.confirm(cancelled
+    ? `“${activity.name}” 활동의 취소를 해제하시겠습니까? 다시 공개 신청과 MVP 집계 대상이 될 수 있습니다.`
+    : `“${activity.name}” 활동을 취소하시겠습니까? 신청 기록은 보존되지만 공개 신청 화면과 MVP 집계에서 제외됩니다.`);
+  if (!confirmed) return;
+
+  try {
+    const data = await adminRequest(`/admin/activities/${encodeURIComponent(activityId)}/cancellation`, {
+      method: 'PUT',
+      body: JSON.stringify({ cancelled: !cancelled })
+    });
+    showToast(data.message);
+    await loadAdminActivities();
+    await Promise.all([loadAdminApplications(), loadActivities()]);
+    if (!elements.adminMonthlyPanel.classList.contains('hidden')) await loadMonthlyStats();
+  } catch (error) {
+    showToast(error.message || '활동 상태를 변경하지 못했습니다.');
+  }
 };
 
 const loadAdminActivities = async () => {
@@ -562,18 +811,42 @@ const switchAdminTab = (tab) => {
   document.querySelectorAll('[data-admin-tab]').forEach((button) => button.classList.toggle('active', button.dataset.adminTab === tab));
   elements.adminApplicationsPanel.classList.toggle('hidden', tab !== 'applications');
   elements.adminActivitiesPanel.classList.toggle('hidden', tab !== 'activities');
+  elements.adminMonthlyPanel.classList.toggle('hidden', tab !== 'monthly');
+  if (tab === 'monthly') loadMonthlyStats();
 };
 
 elements.roleFilters.addEventListener('click', (event) => { const role = event.target.closest('[data-role]')?.dataset.role; if (role) { state.selectedRole = role; setActiveFilter(elements.roleFilters, role, 'role'); renderActivities(); } });
 elements.typeFilters.addEventListener('click', (event) => { const type = event.target.closest('[data-type]')?.dataset.type; if (type) { state.selectedType = type; setActiveFilter(elements.typeFilters, type, 'type'); renderActivities(); } });
-elements.activityList.addEventListener('click', (event) => { const applyId = event.target.closest('[data-apply]')?.dataset.apply; const cancelId = event.target.closest('[data-cancel]')?.dataset.cancel; if (applyId) openApplication(applyId); if (cancelId) openCancellation(cancelId); });
+elements.activityList.addEventListener('click', (event) => {
+  const applyId = event.target.closest('[data-apply]')?.dataset.apply;
+  const rosterId = event.target.closest('[data-roster]')?.dataset.roster;
+  const cancelId = event.target.closest('[data-cancel]')?.dataset.cancel;
+  if (applyId) openApplication(applyId);
+  if (rosterId) openRoster(rosterId);
+  if (cancelId) openCancellation(cancelId);
+});
 elements.adminActivitiesList.addEventListener('click', (event) => {
   const editId = event.target.closest('[data-edit-activity]')?.dataset.editActivity;
+  const cancelId = event.target.closest('[data-cancel-activity]')?.dataset.cancelActivity;
   const deleteId = event.target.closest('[data-delete-activity]')?.dataset.deleteActivity;
   if (editId) openActivityForm(adminActivityById(editId));
+  if (cancelId) toggleActivityCancellation(cancelId);
   if (deleteId) openActivityDeleteForm(deleteId);
 });
-elements.adminApplicationsBody.addEventListener('click', (event) => { const applicationId = event.target.closest('[data-assign-replacement]')?.dataset.assignReplacement; if (applicationId) openReplacementForm(applicationId); });
+elements.adminApplicationsBody.addEventListener('click', (event) => {
+  const replacementId = event.target.closest('[data-assign-replacement]')?.dataset.assignReplacement;
+  if (replacementId) {
+    openReplacementForm(replacementId);
+    return;
+  }
+
+  const editNameId = event.target.closest('[data-edit-application-name]')?.dataset.editApplicationName;
+  if (editNameId) editApplicationName(editNameId);
+});
+elements.adminApplicationsBody.addEventListener('change', (event) => {
+  const select = event.target.closest('[data-attendance-application]');
+  if (select) updateAttendance(select.dataset.attendanceApplication, select.value, select);
+});
 document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.closeDialog).close()));
 document.querySelector('.admin-tabs').addEventListener('click', (event) => { const tab = event.target.closest('[data-admin-tab]')?.dataset.adminTab; if (tab) switchAdminTab(tab); });
 elements.applicationForm.addEventListener('submit', submitApplication);
@@ -591,9 +864,13 @@ elements.homeButton.addEventListener('click', closeAdminView);
 elements.adminLoginForm.addEventListener('submit', loginAdmin);
 elements.adminRefreshButton.addEventListener('click', loadAdminApplications);
 elements.exportCsvButton.addEventListener('click', exportApplicationsCsv);
+elements.monthlyStatsRefreshButton.addEventListener('click', loadMonthlyStats);
+elements.monthlyStatsCsvButton.addEventListener('click', exportMonthlyStatsCsv);
+elements.monthlyStatsMonth.addEventListener('change', loadMonthlyStats);
 elements.adminActivityFilter.addEventListener('change', loadAdminApplications);
 elements.adminStatusFilter.addEventListener('change', loadAdminApplications);
 elements.adminRoleFilter.addEventListener('change', loadAdminApplications);
-elements.adminLogoutButton.addEventListener('click', async () => { await signOut(); state.adminApplications = []; state.adminActivities = []; elements.adminDashboard.classList.add('hidden'); elements.adminLoginPanel.classList.remove('hidden'); showToast('로그아웃했습니다.'); });
+elements.adminLogoutButton.addEventListener('click', async () => { await signOut(); state.adminApplications = []; state.adminActivities = []; state.monthlyStats = null; elements.adminDashboard.classList.add('hidden'); elements.adminLoginPanel.classList.remove('hidden'); showToast('로그아웃했습니다.'); });
 
+elements.monthlyStatsMonth.value = new Date(Date.now() + (9 * 60 * 60 * 1000)).toISOString().slice(0, 7);
 loadActivities();

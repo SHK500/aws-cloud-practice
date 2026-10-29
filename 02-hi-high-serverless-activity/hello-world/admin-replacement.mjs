@@ -1,6 +1,11 @@
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  QueryCommand,
+  TransactWriteCommand
+} from '@aws-sdk/lib-dynamodb';
+import { applicantKeyFor } from './applicant-key.mjs';
 
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
@@ -53,6 +58,33 @@ const parseBody = (event) => {
   return { value: { ...value, originalNormalizedName, replacementNormalizedName } };
 };
 
+const findApplicationById = async (
+  documentClient,
+  applicationsTable,
+  activityId,
+  applicationId
+) => {
+  let lastEvaluatedKey;
+
+  do {
+    const result = await documentClient.send(new QueryCommand({
+      TableName: applicationsTable,
+      KeyConditionExpression: 'activityId = :activityId',
+      FilterExpression: 'applicationId = :applicationId',
+      ExpressionAttributeValues: {
+        ':activityId': activityId,
+        ':applicationId': applicationId
+      },
+      ExclusiveStartKey: lastEvaluatedKey
+    }));
+
+    if (result.Items?.[0]) return result.Items[0];
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return undefined;
+};
+
 export const createAdminReplacementHandler = (
   documentClient = dynamo,
   activitiesTable = process.env.ACTIVITIES_TABLE,
@@ -74,8 +106,36 @@ export const createAdminReplacementHandler = (
   const adminEmail = event?.requestContext?.authorizer?.claims?.email || 'unknown';
   const replacementApplicationId = uuid();
   const salt = saltFactory();
-  const originalApplicantKey = `${value.applicantRole}#${value.originalNormalizedName}`;
-  const replacementApplicantKey = `${value.applicantRole}#${value.replacementNormalizedName}`;
+  let original;
+
+  try {
+    original = await findApplicationById(
+      documentClient,
+      applicationsTable,
+      value.activityId,
+      value.originalApplicationId
+    );
+  } catch (error) {
+    console.error('Failed to load original application for replacement', {
+      name: error.name,
+      message: error.message
+    });
+    return jsonResponse(500, { message: '원래 신청 정보를 확인하는 중 오류가 발생했습니다.' });
+  }
+
+  if (!original
+    || original.applicantRole !== value.applicantRole
+    || original.normalizedName !== value.originalNormalizedName) {
+    return jsonResponse(409, { message: '원래 신청 정보가 변경되었습니다. 목록을 새로고침해 주세요.' });
+  }
+
+  const originalApplicantKey = original.applicantKey;
+  const replacementApplicantKey = applicantKeyFor({
+    activityId: value.activityId,
+    applicantRole: value.applicantRole,
+    normalizedName: value.replacementNormalizedName,
+    password: value.password
+  });
   const countField = value.applicantRole === 'MEMBER' ? 'confirmedCount' : 'reporterCount';
   const capacityField = value.applicantRole === 'MEMBER' ? 'memberCapacity' : 'reporterCapacity';
 
